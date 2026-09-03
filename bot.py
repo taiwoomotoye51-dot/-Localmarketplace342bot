@@ -5,15 +5,24 @@ No third-party API keys required - Fully Telegram Ads friendly
 """
 
 import logging
+import asyncio
 from datetime import datetime
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes, MessageHandler, filters
 
-from config import BOT_TOKEN
+import os
+from dotenv import load_dotenv
+
+load_dotenv()
+
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+if not BOT_TOKEN:
+    raise ValueError("BOT_TOKEN environment variable is required!")
 
 # Enable logging
 logging.basicConfig(
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", 
+    level=logging.INFO
 )
 logger = logging.getLogger(__name__)
 
@@ -103,14 +112,6 @@ CONTENT = {
     }
 }
 
-# Services menu
-SERVICES = {
-    "daily_content": "📰 Get your daily content update",
-    "preferences": "⚙️ Set your content preferences",
-    "history": "📚 View your reading history",
-    "about": "ℹ️ About this bot"
-}
-
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Send a welcome message when /start is issued."""
     user = update.effective_user
@@ -155,24 +156,34 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = query.from_user.id
     data = query.data
     
-    if data == "daily":
-        await send_daily_content(query, user_id)
-    elif data == "preferences":
-        await show_preferences(query, user_id)
-    elif data == "history":
-        await show_history(query, user_id)
-    elif data == "about":
-        await show_about(query)
-    elif data == "unsubscribe":
-        await unsubscribe_user(query, user_id)
-    elif data.startswith("toggle_"):
-        niche = data.replace("toggle_", "")
-        await toggle_niche(query, user_id, niche)
-    elif data.startswith("content_"):
-        niche = data.replace("content_", "")
-        await send_niche_content(query, user_id, niche)
-    elif data == "back_main":
-        await back_to_main(query, user_id)
+    try:
+        if data == "daily":
+            await send_daily_content(query, user_id)
+        elif data == "preferences":
+            await show_preferences(query, user_id)
+        elif data == "history":
+            await show_history(query, user_id)
+        elif data == "about":
+            await show_about(query)
+        elif data == "unsubscribe":
+            await unsubscribe_user(query, user_id)
+        elif data.startswith("toggle_"):
+            niche = data.replace("toggle_", "")
+            await toggle_niche(query, user_id, niche)
+        elif data.startswith("content_"):
+            niche = data.replace("content_", "")
+            await send_niche_content(query, user_id, niche)
+        elif data == "back_main":
+            await back_to_main(query, user_id)
+        elif data == "clear_history":
+            await clear_history(query, user_id)
+        elif data == "resubscribe":
+            await resubscribe_user(query, user_id)
+    except Exception as e:
+        logger.error(f"Error in button_handler: {e}")
+        await query.edit_message_text(
+            "⚠️ Something went wrong. Please try again."
+        )
 
 async def send_daily_content(query, user_id):
     """Send daily content based on user preferences."""
@@ -192,10 +203,10 @@ async def send_daily_content(query, user_id):
     
     message = "📰 Your Daily Content Update\n" + "═" * 25 + "\n\n"
     
+    import random
     for niche in niches:
         if niche in CONTENT:
             content_list = CONTENT[niche]["items"]
-            import random
             item = random.choice(content_list)
             message += f"{CONTENT[niche]['title']}\n"
             message += f"└ {item}\n\n"
@@ -256,20 +267,15 @@ async def toggle_niche(query, user_id, niche):
     current_niches = preferences.get("niches", [])
     
     if niche in current_niches:
-        # Remove niche
-        if len(current_niches) > 1:  # Don't allow removing all niches
+        if len(current_niches) > 1:
             current_niches.remove(niche)
-            message = f"❌ Removed {CONTENT[niche]['title']} from your feed"
         else:
-            message = "⚠️ You must have at least one niche selected!"
+            await query.answer("⚠️ You must have at least one niche selected!", show_alert=True)
+            return
     else:
-        # Add niche
         current_niches.append(niche)
-        message = f"✅ Added {CONTENT[niche]['title']} to your feed"
     
     user_preferences[user_id]["niches"] = current_niches
-    
-    # Refresh preferences view
     await show_preferences(query, user_id)
 
 async def show_history(query, user_id):
@@ -290,7 +296,6 @@ async def show_history(query, user_id):
     message = "📚 **Your Reading History**\n"
     message += "═" * 20 + "\n\n"
     
-    # Show last 10 items
     recent_history = history[-10:]
     for entry in reversed(recent_history):
         message += f"📌 *{entry['date']}*\n"
@@ -306,6 +311,13 @@ async def show_history(query, user_id):
     reply_markup = InlineKeyboardMarkup(keyboard)
     
     await query.edit_message_text(message, reply_markup=reply_markup)
+
+async def clear_history(query, user_id):
+    """Clear user's history."""
+    if user_id in user_content_history:
+        user_content_history[user_id] = []
+        await query.answer("🗑️ History cleared!", show_alert=True)
+        await show_history(query, user_id)
 
 async def show_about(query):
     """Show bot information."""
@@ -344,6 +356,13 @@ async def unsubscribe_user(query, user_id):
         "Click 'Resubscribe' to start receiving content again.",
         reply_markup=reply_markup
     )
+
+async def resubscribe_user(query, user_id):
+    """Resubscribe user."""
+    if user_id in user_preferences:
+        user_preferences[user_id]["subscribed"] = True
+    
+    await back_to_main(query, user_id)
 
 async def back_to_main(query, user_id):
     """Return to main menu."""
@@ -434,7 +453,7 @@ async def about_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     mock_query = MockQuery()
     await show_about(mock_query)
 
-async def clear_history_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def clear_history_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /clearhistory command."""
     user_id = update.effective_user.id
     if user_id in user_content_history:
@@ -452,25 +471,31 @@ async def echo(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 def main():
     """Start the bot."""
-    application = Application.builder().token(BOT_TOKEN).build()
+    try:
+        logger.info("Starting bot...")
+        application = Application.builder().token(BOT_TOKEN).build()
 
-    # Command handlers
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(CommandHandler("help", help_command))
-    application.add_handler(CommandHandler("daily", daily_command))
-    application.add_handler(CommandHandler("preferences", preferences_command))
-    application.add_handler(CommandHandler("history", history_command))
-    application.add_handler(CommandHandler("about", about_command))
-    application.add_handler(CommandHandler("clearhistory", clear_history_handler))
-    
-    # Callback query handler
-    application.add_handler(CallbackQueryHandler(button_handler))
-    
-    # Message handler
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, echo))
+        # Command handlers
+        application.add_handler(CommandHandler("start", start))
+        application.add_handler(CommandHandler("help", help_command))
+        application.add_handler(CommandHandler("daily", daily_command))
+        application.add_handler(CommandHandler("preferences", preferences_command))
+        application.add_handler(CommandHandler("history", history_command))
+        application.add_handler(CommandHandler("about", about_command))
+        application.add_handler(CommandHandler("clearhistory", clear_history_command))
+        
+        # Callback query handler
+        application.add_handler(CallbackQueryHandler(button_handler))
+        
+        # Message handler
+        application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, echo))
 
-    # Start the Bot
-    application.run_polling(allowed_updates=Update.ALL_TYPES)
+        # Start the Bot
+        logger.info("Bot is running...")
+        application.run_polling(allowed_updates=Update.ALL_TYPES)
+    except Exception as e:
+        logger.error(f"Failed to start bot: {e}")
+        raise
 
 if __name__ == "__main__":
     main()
